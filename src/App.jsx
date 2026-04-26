@@ -1,18 +1,21 @@
 import { useState, useEffect, useRef } from "react";
 import { ethers } from "ethers";
 
-// --- PASTE YOUR REMIX ADDRESS HERE ---
-const CONTRACT_ADDRESS = "0xeaE7B4cbd64a9427526d6A181de002e5a182bcdd"; 
+// --- PASTE YOUR NEW REMIX ADDRESS HERE ---
+const CONTRACT_ADDRESS = "0xC688B3f74D8176a18a720110a1Eb2c7bB9273323"; 
 
 const ABI = [
   "function deposit() public payable",
   "function executePayroll(address[] _recipients, uint256[] _amounts) public",
   "function getBalance() public view returns (uint256)",
-  "function totalDisbursed() public view returns (uint256)"
+  "function totalDisbursed() public view returns (uint256)",
+  "function createInvoice(string _clientName, uint256 _amount) public",
+  "function payInvoice(uint256 _id) public payable",
+  "function getAllInvoices() public view returns (tuple(uint256 id, string clientName, uint256 amount, bool isPaid)[])"
 ];
 
 const ARC_TESTNET = {
-  chainId: '0x4CEB92', // 5042002 in hex
+  chainId: '0x4CEB92', 
   chainName: 'Arc Testnet',
   nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
   rpcUrls: ['https://arc-testnet.drpc.org'],
@@ -20,6 +23,10 @@ const ARC_TESTNET = {
 };
 
 function App() {
+  // Check if this is a payment link
+  const urlParams = new URLSearchParams(window.location.search);
+  const payInvoiceId = urlParams.get('pay');
+
   const [activeTab, setActiveTab] = useState("treasury");
   const [account, setAccount] = useState("");
   const [balance, setBalance] = useState("0");
@@ -28,22 +35,19 @@ function App() {
   const fileInputRef = useRef(null);
   
   const [employees, setEmployees] = useState([{ name: "", address: "", amount: "" }]);
-  const [invoices, setInvoices] = useState([{ client: "Kava Labs", amount: "5000", status: "Pending", due: "2026-05-01" }]);
+  
+  // Real Invoice State
+  const [invoices, setInvoices] = useState([]);
+  const [newClientName, setNewClientName] = useState("");
+  const [newInvoiceAmount, setNewInvoiceAmount] = useState("");
 
-  // --- NETWORK ENFORCEMENT & CONNECTION ---
   const forceArcNetwork = async () => {
     if (!window.ethereum) return;
     try {
-      await window.ethereum.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: ARC_TESTNET.chainId }],
-      });
+      await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: ARC_TESTNET.chainId }] });
     } catch (error) {
       if (error.code === 4902) {
-        await window.ethereum.request({
-          method: 'wallet_addEthereumChain',
-          params: [ARC_TESTNET],
-        });
+        await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [ARC_TESTNET] });
       }
     }
   };
@@ -58,13 +62,27 @@ function App() {
   };
 
   const fetchData = async () => {
-    if (!window.ethereum || !account) return;
+    if (!window.ethereum || CONTRACT_ADDRESS === "YOUR_NEW_REMIX_ADDRESS") return;
     const provider = new ethers.BrowserProvider(window.ethereum);
     const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
-    const bal = await contract.getBalance();
-    const dis = await contract.totalDisbursed();
-    setBalance(ethers.formatEther(bal));
-    setDisbursed(ethers.formatEther(dis));
+    
+    try {
+      const bal = await contract.getBalance();
+      const dis = await contract.totalDisbursed();
+      setBalance(ethers.formatEther(bal));
+      setDisbursed(ethers.formatEther(dis));
+
+      const invs = await contract.getAllInvoices();
+      const formattedInvoices = invs.map(inv => ({
+        id: inv.id.toString(),
+        client: inv.clientName,
+        amount: ethers.formatEther(inv.amount),
+        isPaid: inv.isPaid
+      }));
+      setInvoices(formattedInvoices);
+    } catch (error) {
+      console.error("Error fetching data. Make sure contract is deployed.", error);
+    }
   };
 
   useEffect(() => {
@@ -73,10 +91,9 @@ function App() {
     return () => clearInterval(interval);
   }, [account]);
 
-  // --- CONTRACT ACTIONS ---
+  // --- ACTIONS ---
   const handleDeposit = async () => {
     if (!depositAmount) return;
-    await forceArcNetwork();
     const provider = new ethers.BrowserProvider(window.ethereum);
     const signer = await provider.getSigner();
     const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
@@ -87,7 +104,6 @@ function App() {
   };
 
   const handlePayroll = async () => {
-    await forceArcNetwork();
     const addresses = employees.map(emp => emp.address);
     const amounts = employees.map(emp => ethers.parseEther(emp.amount || "0"));
     const provider = new ethers.BrowserProvider(window.ethereum);
@@ -99,7 +115,35 @@ function App() {
     fetchData();
   };
 
-  // --- UTILITIES (JSON IMPORT & CSV EXPORT) ---
+  const handleCreateInvoice = async () => {
+    if (!newClientName || !newInvoiceAmount) return;
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const signer = await provider.getSigner();
+    const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+    const tx = await contract.createInvoice(newClientName, ethers.parseEther(newInvoiceAmount));
+    await tx.wait();
+    setNewClientName("");
+    setNewInvoiceAmount("");
+    fetchData();
+  };
+
+  const handlePayInvoice = async (id, amount) => {
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const signer = await provider.getSigner();
+    const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+    const tx = await contract.payInvoice(id, { value: ethers.parseEther(amount) });
+    await tx.wait();
+    fetchData();
+    alert("Payment Successful! Funds routed to FairPay Treasury.");
+  };
+
+  const copyInvoiceLink = (id) => {
+    const url = `${window.location.origin}/?pay=${id}`;
+    navigator.clipboard.writeText(url);
+    alert("Payment link copied to clipboard!");
+  };
+
+  // --- UTILS ---
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -108,22 +152,17 @@ function App() {
       try {
         const json = JSON.parse(event.target.result);
         if (Array.isArray(json)) setEmployees(json);
-      } catch (err) {
-        alert("Invalid JSON file. Format must be an array of objects: [{name, address, amount}]");
-      }
+      } catch (err) { alert("Invalid JSON file."); }
     };
     reader.readAsText(file);
   };
 
   const exportCSV = () => {
-    const headers = "Name,Wallet Address,Amount (USDC)\n";
     const rows = employees.map(e => `${e.name},${e.address},${e.amount}`).join("\n");
-    const blob = new Blob([headers + rows], { type: 'text/csv' });
+    const blob = new Blob(["Name,Wallet Address,Amount (USDC)\n" + rows], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `FairPay_Payroll_${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
+    a.href = url; a.download = `FairPay_Payroll.csv`; a.click();
   };
 
   const updateEmployee = (index, field, value) => {
@@ -132,10 +171,50 @@ function App() {
     setEmployees(updated);
   };
 
+  // ==========================================
+  // CLIENT CHECKOUT VIEW (If ?pay=ID is present)
+  // ==========================================
+  if (payInvoiceId !== null) {
+    const invoiceToPay = invoices.find(inv => inv.id === payInvoiceId);
+    return (
+      <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col items-center justify-center p-6">
+        <h1 className="text-4xl font-black text-[#ff5500] mb-8 tracking-widest">FAIRPAY SECURE CHECKOUT</h1>
+        <div className="bg-zinc-900 border border-zinc-800 p-10 rounded-lg w-full max-w-md shadow-2xl">
+          {!account ? (
+            <div className="text-center">
+              <p className="text-zinc-400 mb-6 uppercase tracking-widest text-xs">Connect wallet to view invoice</p>
+              <button onClick={connectWallet} className="bg-white text-black font-bold uppercase w-full py-4 hover:bg-zinc-200">Connect Wallet</button>
+            </div>
+          ) : !invoiceToPay ? (
+            <div className="text-center text-zinc-500 animate-pulse">Locating Invoice On-Chain...</div>
+          ) : (
+            <div>
+              <div className="flex justify-between text-xs tracking-widest text-zinc-500 uppercase mb-4">
+                <span>Invoice #{invoiceToPay.id}</span>
+                <span className={invoiceToPay.isPaid ? "text-green-500" : "text-yellow-500"}>{invoiceToPay.isPaid ? "PAID" : "PENDING"}</span>
+              </div>
+              <h2 className="text-2xl font-serif text-white mb-2">Billed to: {invoiceToPay.client}</h2>
+              <div className="text-5xl font-black text-white my-8 border-y border-zinc-800 py-6">{invoiceToPay.amount} <span className="text-xl text-zinc-500">USDC</span></div>
+              
+              {invoiceToPay.isPaid ? (
+                <div className="bg-green-500/10 text-green-500 font-bold uppercase w-full py-4 text-center border border-green-500/20">Settled on Arc Testnet</div>
+              ) : (
+                <button onClick={() => handlePayInvoice(invoiceToPay.id, invoiceToPay.amount)} className="bg-[#ff5500] text-white font-bold uppercase w-full py-4 hover:bg-[#ff7733] transition shadow-[0_0_20px_rgba(255,85,0,0.3)]">
+                  Pay Now
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ==========================================
+  // MAIN ADMIN VIEW 
+  // ==========================================
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white font-sans selection:bg-[#ff5500] selection:text-white pb-20 overflow-x-hidden">
-      
-      {/* HEADER NAVIGATION */}
       <header className="flex flex-col md:flex-row justify-between items-center p-6 md:p-8 border-b border-zinc-900 gap-4">
         <div className="text-3xl font-black tracking-tighter text-[#ff5500]">FAIRPAY</div>
         <nav className="flex space-x-6 md:space-x-12 text-xs font-bold tracking-widest text-zinc-500">
@@ -155,8 +234,7 @@ function App() {
           <div className="animate-in fade-in duration-500">
             <h1 className="text-5xl md:text-7xl font-black tracking-tighter mb-2">SHIELDED</h1>
             <h1 className="text-5xl md:text-7xl font-black tracking-tighter text-transparent" style={{ WebkitTextStroke: '1px #333' }}>TREASURY</h1>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8 border-t border-b border-zinc-900 py-12 mt-12 md:mt-16">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8 border-t border-b border-zinc-900 py-12 mt-12">
               <div>
                 <p className="text-xs tracking-widest text-zinc-500 font-bold mb-4 uppercase">Treasury Balance</p>
                 <div className="text-4xl md:text-5xl font-bold mb-2 break-words">{Number(balance).toFixed(2)} <span className="text-lg text-zinc-500">USDC</span></div>
@@ -165,23 +243,13 @@ function App() {
                 <p className="text-xs tracking-widest text-zinc-500 font-bold mb-4 uppercase">Total Disbursed</p>
                 <div className="text-4xl md:text-5xl font-bold mb-2 break-words">{Number(disbursed).toFixed(2)} <span className="text-lg text-zinc-500">USDC</span></div>
               </div>
-              <div className="md:border-l md:border-zinc-900 md:pl-8 flex flex-col justify-center">
-                 <p className="text-xs tracking-widest text-zinc-500 font-bold mb-4 uppercase">Network Status</p>
-                 <div className="flex items-center space-x-3 text-sm font-bold tracking-widest text-[#ff5500]">
-                    <div className="w-2 h-2 bg-[#ff5500] rounded-full animate-pulse"></div>
-                    <span>ARC TESTNET L1</span>
-                 </div>
-              </div>
             </div>
-
             <div className="mt-16 max-w-xl">
               <h2 className="text-2xl md:text-3xl font-serif italic text-zinc-300 mb-4">Deposit / Fund Treasury</h2>
               <div className="border-b border-zinc-700 pb-2 flex items-end">
-                <input type="number" placeholder="0.00" value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} className="bg-transparent text-4xl md:text-5xl font-bold outline-none w-full placeholder-zinc-800" />
+                <input type="number" placeholder="0.00" value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} className="bg-transparent text-4xl font-bold outline-none w-full" />
               </div>
-              <button onClick={handleDeposit} className="mt-8 bg-white text-black text-xs font-bold tracking-widest uppercase px-8 py-4 hover:bg-zinc-200 transition w-full md:w-auto">
-                Execute Deposit
-              </button>
+              <button onClick={handleDeposit} className="mt-8 bg-white text-black text-xs font-bold uppercase px-8 py-4 hover:bg-zinc-200 transition">Execute Deposit</button>
             </div>
           </div>
         )}
@@ -194,37 +262,26 @@ function App() {
                 <h1 className="text-5xl md:text-7xl font-black tracking-tighter mb-2">BATCH</h1>
                 <h1 className="text-5xl md:text-7xl font-black tracking-tighter text-transparent" style={{ WebkitTextStroke: '1px #333' }}>PAYROLL</h1>
               </div>
-              <div className="flex space-x-4 w-full md:w-auto">
+              <div className="flex space-x-4">
                 <input type="file" accept=".json" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
-                <button onClick={() => fileInputRef.current.click()} className="border border-zinc-700 text-xs font-bold tracking-widest px-6 py-3 hover:bg-zinc-900 transition flex-1 md:flex-none">
-                  IMPORT JSON
-                </button>
-                <button onClick={exportCSV} className="border border-zinc-700 text-xs font-bold tracking-widest px-6 py-3 hover:bg-zinc-900 transition flex-1 md:flex-none">
-                  EXPORT CSV
-                </button>
+                <button onClick={() => fileInputRef.current.click()} className="border border-zinc-700 text-xs font-bold px-6 py-3 hover:bg-zinc-900 transition">IMPORT JSON</button>
+                <button onClick={exportCSV} className="border border-zinc-700 text-xs font-bold px-6 py-3 hover:bg-zinc-900 transition">EXPORT CSV</button>
               </div>
             </div>
-
             <div className="space-y-4 mt-8 overflow-x-auto pb-4">
               <div className="min-w-[600px]">
                 {employees.map((emp, index) => (
                   <div key={index} className="grid grid-cols-12 gap-2 mb-2">
-                    <input placeholder="Name" value={emp.name} onChange={(e) => updateEmployee(index, 'name', e.target.value)} className="col-span-3 bg-zinc-900/50 border border-zinc-800 p-3 text-sm outline-none focus:border-[#ff5500]" />
-                    <input placeholder="Wallet (0x...)" value={emp.address} onChange={(e) => updateEmployee(index, 'address', e.target.value)} className="col-span-6 bg-zinc-900/50 border border-zinc-800 p-3 text-sm font-mono outline-none focus:border-[#ff5500]" />
-                    <input placeholder="USDC" type="number" value={emp.amount} onChange={(e) => updateEmployee(index, 'amount', e.target.value)} className="col-span-3 bg-zinc-900/50 border border-zinc-800 p-3 text-sm font-mono outline-none focus:border-[#ff5500]" />
+                    <input placeholder="Name" value={emp.name} onChange={(e) => updateEmployee(index, 'name', e.target.value)} className="col-span-3 bg-zinc-900/50 border border-zinc-800 p-3 text-sm outline-none" />
+                    <input placeholder="Wallet" value={emp.address} onChange={(e) => updateEmployee(index, 'address', e.target.value)} className="col-span-6 bg-zinc-900/50 border border-zinc-800 p-3 text-sm font-mono outline-none" />
+                    <input placeholder="USDC" type="number" value={emp.amount} onChange={(e) => updateEmployee(index, 'amount', e.target.value)} className="col-span-3 bg-zinc-900/50 border border-zinc-800 p-3 text-sm font-mono outline-none" />
                   </div>
                 ))}
               </div>
             </div>
-
-            <button onClick={() => setEmployees([...employees, { name: "", address: "", amount: "" }])} className="text-xs font-bold tracking-widest uppercase text-zinc-500 hover:text-white transition mt-4 mb-12 block">
-              + Add Row
-            </button>
-
+            <button onClick={() => setEmployees([...employees, { name: "", address: "", amount: "" }])} className="text-xs font-bold uppercase text-zinc-500 hover:text-white mt-4 mb-12 block">+ Add Row</button>
             <div className="border-t border-zinc-900 pt-8">
-              <button onClick={handlePayroll} className="bg-[#ff5500] text-white text-xs font-bold tracking-widest uppercase px-8 py-5 hover:bg-[#ff7733] transition w-full md:w-1/3 shadow-[0_0_20px_rgba(255,85,0,0.3)]">
-                Execute On-Chain Transfer
-              </button>
+              <button onClick={handlePayroll} className="bg-[#ff5500] text-white text-xs font-bold uppercase px-8 py-5 hover:bg-[#ff7733] w-full md:w-1/3 shadow-[0_0_20px_rgba(255,85,0,0.3)]">Execute Transfer</button>
             </div>
           </div>
         )}
@@ -232,39 +289,50 @@ function App() {
         {/* --- TAB: INVOICES --- */}
         {activeTab === 'invoices' && (
           <div className="animate-in fade-in duration-500">
-            <h1 className="text-5xl md:text-7xl font-black tracking-tighter mb-2">PENDING</h1>
+            <h1 className="text-5xl md:text-7xl font-black tracking-tighter mb-2">CLIENT</h1>
             <h1 className="text-5xl md:text-7xl font-black tracking-tighter text-transparent mb-12" style={{ WebkitTextStroke: '1px #333' }}>INVOICES</h1>
             
-            <div className="bg-zinc-900/30 border border-zinc-800 p-6 md:p-8 rounded-sm overflow-x-auto">
+            {/* Create Invoice Form */}
+            <div className="flex gap-4 mb-8 bg-zinc-900/50 p-6 border border-zinc-800 flex-wrap">
+              <input type="text" placeholder="Client Name" value={newClientName} onChange={e => setNewClientName(e.target.value)} className="bg-zinc-950 border border-zinc-800 p-3 outline-none flex-1" />
+              <input type="number" placeholder="Amount (USDC)" value={newInvoiceAmount} onChange={e => setNewInvoiceAmount(e.target.value)} className="bg-zinc-950 border border-zinc-800 p-3 outline-none w-48" />
+              <button onClick={handleCreateInvoice} className="bg-white text-black text-xs font-bold uppercase px-8 py-3 hover:bg-zinc-200">Issue Invoice</button>
+            </div>
+
+            {/* Invoices List */}
+            <div className="bg-zinc-900/30 border border-zinc-800 p-6 rounded-sm overflow-x-auto">
               <table className="w-full text-left border-collapse min-w-[600px]">
                 <thead>
                   <tr className="text-xs tracking-widest text-zinc-500 uppercase border-b border-zinc-800">
+                    <th className="pb-4">ID</th>
                     <th className="pb-4">Client</th>
-                    <th className="pb-4">Due Date</th>
                     <th className="pb-4">Amount</th>
                     <th className="pb-4">Status</th>
-                    <th className="pb-4">Action</th>
+                    <th className="pb-4 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {invoices.map((inv, idx) => (
+                  {invoices.length === 0 ? (
+                    <tr><td colSpan="5" className="py-6 text-center text-zinc-600 italic">No invoices issued on-chain yet.</td></tr>
+                  ) : invoices.map((inv, idx) => (
                     <tr key={idx} className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition">
+                      <td className="py-6 font-mono text-zinc-500">#{inv.id}</td>
                       <td className="py-6 font-bold">{inv.client}</td>
-                      <td className="py-6 font-mono text-sm text-zinc-400">{inv.due}</td>
-                      <td className="py-6 font-mono text-sm text-white">{inv.amount} USDC</td>
+                      <td className="py-6 font-mono text-white">{inv.amount} USDC</td>
                       <td className="py-6">
-                        <span className="text-xs font-bold tracking-widest bg-yellow-500/10 text-yellow-500 px-3 py-1 rounded-full">{inv.status}</span>
+                        <span className={`text-xs font-bold tracking-widest px-3 py-1 rounded-full ${inv.isPaid ? 'bg-green-500/10 text-green-500' : 'bg-yellow-500/10 text-yellow-500'}`}>
+                          {inv.isPaid ? 'PAID' : 'PENDING'}
+                        </span>
                       </td>
-                      <td className="py-6">
-                        <button className="text-xs font-bold uppercase text-[#ff5500] hover:underline">Copy Link</button>
+                      <td className="py-6 text-right">
+                        <button onClick={() => copyInvoiceLink(inv.id)} className="text-xs font-bold uppercase text-[#ff5500] hover:underline">
+                          Copy Pay Link
+                        </button>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <button className="mt-8 text-xs font-bold tracking-widest uppercase text-zinc-500 hover:text-white transition">
-                + Create New Invoice
-              </button>
             </div>
           </div>
         )}
