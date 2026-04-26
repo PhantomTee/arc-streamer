@@ -21,7 +21,7 @@ const ABI = [
 
 const ARC_RPC = 'https://arc-testnet.drpc.org';
 const ARC_TESTNET = {
-  chainId: '0x4ceb92', // MetaMask prefers strict lowercase hex
+  chainId: '0x4cef52', // MetaMask prefers strict lowercase hex
   chainName: 'Arc Testnet',
   nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
   rpcUrls: [ARC_RPC],
