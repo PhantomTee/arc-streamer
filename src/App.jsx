@@ -23,7 +23,10 @@ const TREASURY_ABI = [
   "event InvoicePaid(uint256 id, address payer, uint256 amount)"
 ];
 
-const ARC_RPC = 'https://arc-testnet.drpc.org';
+// --- OPTIMIZATION: Official RPC & Safe Lookback Limit ---
+const ARC_RPC = 'https://rpc.testnet.arc.network';
+const LOOKBACK_BLOCKS = 8000;
+
 const ARC_TESTNET = {
   chainId: '0x4cef52',
   chainName: 'Arc Testnet',
@@ -50,17 +53,19 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState("");
   
-  // NEW: Toast Notification State
   const [toast, setToast] = useState({ show: false, message: "", type: "success" });
   
   const fileInputRef = useRef(null);
+  
+  // --- OPTIMIZATION: Provider Reuse ---
+  const readOnlyProvider = useRef(new ethers.JsonRpcProvider(ARC_RPC)).current;
+
   const [employees, setEmployees] = useState([{ name: "", address: "", amount: "" }]);
   const [invoices, setInvoices] = useState([]);
   const [history, setHistory] = useState([]);
   const [newClientName, setNewClientName] = useState("");
   const [newInvoiceAmount, setNewInvoiceAmount] = useState("");
 
-  // --- TOAST NOTIFICATION HELPER ---
   const showToast = (message, type = "success") => {
     setToast({ show: true, message, type });
     setTimeout(() => setToast({ show: false, message: "", type: "success" }), 4000);
@@ -156,10 +161,9 @@ function App() {
 
   const fetchData = async () => {
     if (!activeContractAddress) return;
-    const readOnlyProvider = new ethers.JsonRpcProvider(ARC_RPC);
+    
     const contract = new ethers.Contract(activeContractAddress, TREASURY_ABI, readOnlyProvider);
     
-    // Fetch Balances and Invoices
     try {
       const bal = await contract.getBalance();
       const dis = await contract.totalDisbursed();
@@ -174,31 +178,40 @@ function App() {
       console.error("State fetch error:", error);
     }
 
-    // THE LEDGER BUG FIX: Only query recent blocks to prevent RPC timeouts
+    // --- OPTIMIZATION: Parallel Ledger Fetching & Safe Lookback ---
     try {
       const currentBlock = await readOnlyProvider.getBlockNumber();
-      // Look back ~50,000 blocks to prevent payload too large errors
-      const fromBlock = Math.max(0, currentBlock - 50000); 
+      const fromBlock = Math.max(0, currentBlock - LOOKBACK_BLOCKS);
 
-      const depositLogs = await contract.queryFilter(contract.filters.Deposited(), fromBlock, "latest");
-      const payrollLogs = await contract.queryFilter(contract.filters.PayrollExecuted(), fromBlock, "latest");
-      const invPaidLogs = await contract.queryFilter(contract.filters.InvoicePaid(), fromBlock, "latest");
+      const [depositLogs, payrollLogs, invPaidLogs] = await Promise.all([
+        contract.queryFilter(contract.filters.Deposited(), fromBlock, "latest"),
+        contract.queryFilter(contract.filters.PayrollExecuted(), fromBlock, "latest"),
+        contract.queryFilter(contract.filters.InvoicePaid(), fromBlock, "latest")
+      ]);
 
       let allEvents = [];
-      depositLogs.forEach(log => allEvents.push({ type: "DEPOSIT", hash: log.transactionHash, block: log.blockNumber, desc: `Treasury Funded by ${log.args[0].slice(0,6)}...`, amount: `+${ethers.formatEther(log.args[1])}` }));
-      payrollLogs.forEach(log => allEvents.push({ type: "PAYROLL", hash: log.transactionHash, block: log.blockNumber, desc: `Batch transfer to ${log.args[0].toString()} recipients`, amount: `-${ethers.formatEther(log.args[1])}` }));
-      invPaidLogs.forEach(log => allEvents.push({ type: "INVOICE PAID", hash: log.transactionHash, block: log.blockNumber, desc: `Invoice #${log.args[0].toString()} settled by client`, amount: `+${ethers.formatEther(log.args[2])}` }));
+      depositLogs.forEach(log => {
+        allEvents.push({ type: "DEPOSIT", hash: log.transactionHash, block: log.blockNumber, desc: `Treasury Funded by ${log.args[0].slice(0,6)}...`, amount: `+${ethers.formatEther(log.args[1])}` });
+      });
+      payrollLogs.forEach(log => {
+        allEvents.push({ type: "PAYROLL", hash: log.transactionHash, block: log.blockNumber, desc: `Batch transfer to ${log.args[0].toString()} recipients`, amount: `-${ethers.formatEther(log.args[1])}` });
+      });
+      invPaidLogs.forEach(log => {
+        allEvents.push({ type: "INVOICE PAID", hash: log.transactionHash, block: log.blockNumber, desc: `Invoice #${log.args[0].toString()} settled by client`, amount: `+${ethers.formatEther(log.args[2])}` });
+      });
 
       allEvents.sort((a, b) => b.block - a.block);
       setHistory(allEvents);
     } catch (error) {
       console.error("Ledger fetch error:", error);
+      showToast("Could not load full history. Showing cached events.", "error");
     }
   };
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 8000); 
+    // --- OPTIMIZATION: 15-second polling ---
+    const interval = setInterval(fetchData, 15000); 
     return () => clearInterval(interval);
   }, [activeContractAddress]);
 
@@ -232,7 +245,6 @@ function App() {
   const handlePayroll = () => executeTransaction(async (c) => {
     const addresses = employees.map(emp => emp.address);
     const amounts = employees.map(emp => ethers.parseEther(emp.amount.toString()));
-    
     const tx = await c.executePayroll(addresses, amounts);
     await tx.wait(); 
     setEmployees([{ name: "", address: "", amount: "" }]);
@@ -275,12 +287,11 @@ function App() {
     }
   };
 
-  // --- DYNAMIC FORM HANDLERS ---
   const addRow = () => setEmployees([...employees, { name: "", address: "", amount: "" }]);
   
   const removeRow = (index) => {
     if (employees.length === 1) {
-      setEmployees([{ name: "", address: "", amount: "" }]); // Reset instead of delete if only 1 row
+      setEmployees([{ name: "", address: "", amount: "" }]); 
     } else {
       setEmployees(employees.filter((_, i) => i !== index));
     }
@@ -325,21 +336,16 @@ function App() {
     showToast("Payment Link Copied!");
   };
 
-  // --- STRICT VALIDATION CHECKS ---
   const isDepositValid = depositAmount && Number(depositAmount) > 0;
   const isInvoiceValid = newClientName.trim() !== "" && newInvoiceAmount && Number(newInvoiceAmount) > 0;
-  
-  // Every row must have a name, a valid amount, and a strictly valid EVM address
   const isPayrollValid = employees.length > 0 && employees.every(emp => 
-    emp.name.trim() !== "" && 
-    ethers.isAddress(emp.address.trim()) && 
-    emp.amount && Number(emp.amount) > 0
+    emp.name.trim() !== "" && ethers.isAddress(emp.address.trim()) && emp.amount && Number(emp.amount) > 0
   );
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white font-sans selection:bg-[#ff5500] selection:text-white pb-20 overflow-x-hidden relative">
       
-      {/* --- CUSTOM TOAST NOTIFICATION --- */}
+      {/* --- TOAST NOTIFICATION --- */}
       <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 transition-all duration-300 ${toast.show ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-10 pointer-events-none'}`}>
         <div className={`flex items-center gap-3 px-6 py-3 rounded-md shadow-2xl border text-sm font-bold tracking-widest uppercase ${
           toast.type === 'error' ? 'bg-red-500/10 border-red-500/30 text-red-500' : 
@@ -516,13 +522,8 @@ function App() {
                       return (
                         <div key={index} className="flex gap-2 items-center group">
                           <input placeholder="Name" value={emp.name} disabled={isLoading} onChange={(e) => { const n = [...employees]; n[index].name = e.target.value; setEmployees(n); }} className="flex-1 bg-zinc-900/50 border border-zinc-800 p-3 text-sm outline-none rounded-sm focus:border-zinc-500 transition disabled:opacity-50" />
-                          
-                          {/* Wallet Input with Red Outline Error Checking */}
                           <input placeholder="Wallet (0x...)" value={emp.address} disabled={isLoading} onChange={(e) => { const n = [...employees]; n[index].address = e.target.value; setEmployees(n); }} className={`flex-[2] bg-zinc-900/50 border ${isAddrValid ? 'border-zinc-800 focus:border-zinc-500' : 'border-red-500 focus:border-red-500'} p-3 text-sm font-mono outline-none rounded-sm transition disabled:opacity-50`} />
-                          
                           <input placeholder="USDC" type="number" value={emp.amount} disabled={isLoading} onChange={(e) => { const n = [...employees]; n[index].amount = e.target.value; setEmployees(n); }} className="flex-1 bg-zinc-900/50 border border-zinc-800 p-3 text-sm font-mono outline-none rounded-sm focus:border-zinc-500 transition disabled:opacity-50" />
-                          
-                          {/* DELETE ROW BUTTON */}
                           <button onClick={() => removeRow(index)} disabled={isLoading} className="p-3 text-zinc-600 hover:text-red-500 transition disabled:opacity-50" title="Remove Row">
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                           </button>
@@ -582,7 +583,12 @@ function App() {
               <div className="animate-in fade-in">
                 <h1 className="text-5xl md:text-7xl font-black tracking-tighter text-transparent mb-12" style={{ WebkitTextStroke: '1px #333' }}>ON-CHAIN LEDGER</h1>
                 <div className="space-y-4">
-                  {history.length === 0 ? <p className="text-zinc-500 italic text-sm">Reading Arc ledger. If no events appear, this treasury has no past transactions yet.</p> : history.map((event, i) => (
+                  {history.length === 0 ? (
+                    <p className="text-zinc-500 italic text-sm">
+                      No on-chain events found in the last {LOOKBACK_BLOCKS} blocks.<br/>
+                      Make a deposit, execute payroll, or process an invoice to see history.
+                    </p>
+                  ) : history.map((event, i) => (
                     <div key={i} className="flex justify-between items-center p-6 bg-zinc-900/40 border border-zinc-800 rounded-sm hover:border-zinc-700 transition">
                       <div className="flex gap-6 items-center">
                         <span className={`text-[10px] font-bold uppercase tracking-widest px-3 py-2 rounded-sm w-32 text-center ${event.type === 'DEPOSIT' || event.type === 'INVOICE PAID' ? 'bg-green-500/10 text-green-500 border border-green-500/20' : 'bg-blue-500/10 text-blue-500 border border-blue-500/20'}`}>{event.type}</span>
