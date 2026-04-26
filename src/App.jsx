@@ -21,7 +21,7 @@ const ABI = [
 
 const ARC_RPC = 'https://arc-testnet.drpc.org';
 const ARC_TESTNET = {
-  chainId: '0x4CEB92', 
+  chainId: '0x4ceb92', // MetaMask prefers strict lowercase hex!
   chainName: 'Arc Testnet',
   nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
   rpcUrls: [ARC_RPC],
@@ -54,17 +54,28 @@ function App() {
       await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: ARC_TESTNET.chainId }] });
     } catch (error) {
       if (error.code === 4902) {
-        await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [ARC_TESTNET] });
+        try {
+          await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [ARC_TESTNET] });
+        } catch (addError) {
+          console.error("User rejected adding the network:", addError);
+        }
       }
     }
   };
 
   const connectWallet = async () => {
     if (window.ethereum && !isAuditMode) {
-      await forceArcNetwork();
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const accounts = await provider.send("eth_requestAccounts", []);
-      setAccount(accounts[0]);
+      try {
+        // Step 1: Secure the account connection FIRST
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const accounts = await provider.send("eth_requestAccounts", []);
+        setAccount(accounts[0]);
+
+        // Step 2: Enforce the Arc Testnet SECOND
+        await forceArcNetwork();
+      } catch (err) {
+        console.error("Wallet connection failed:", err);
+      }
     }
   };
 
