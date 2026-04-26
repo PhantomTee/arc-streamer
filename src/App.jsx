@@ -25,7 +25,7 @@ const TREASURY_ABI = [
 
 const ARC_RPC = 'https://arc-testnet.drpc.org';
 const ARC_TESTNET = {
-  chainId: '0x4cef52', // The CORRECT hex for 5042002
+  chainId: '0x4cef52',
   chainName: 'Arc Testnet',
   nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
   rpcUrls: [ARC_RPC],
@@ -35,35 +35,32 @@ const ARC_TESTNET = {
 function App() {
   const urlParams = new URLSearchParams(window.location.search);
   const payInvoiceId = urlParams.get('pay');
-  const targetTreasury = urlParams.get('t'); // We now need to know WHICH treasury to pay/audit
+  const targetTreasury = urlParams.get('t');
   const isAuditMode = urlParams.get('audit') === 'true';
 
+  const [appEntered, setAppEntered] = useState(false);
   const [activeTab, setActiveTab] = useState(isAuditMode ? "history" : "treasury");
   const [account, setAccount] = useState("");
-  
-  // SaaS States
-  const [userTreasury, setUserTreasury] = useState(null); // The dynamic address for the current user
+  const [userTreasury, setUserTreasury] = useState(null); 
   const [isInitializing, setIsInitializing] = useState(false);
   
-  // Dashboard States
   const [balance, setBalance] = useState("0");
   const [disbursed, setDisbursed] = useState("0");
   const [depositAmount, setDepositAmount] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState("");
   
+  const fileInputRef = useRef(null);
   const [employees, setEmployees] = useState([{ name: "", address: "", amount: "" }]);
   const [invoices, setInvoices] = useState([]);
   const [history, setHistory] = useState([]);
   const [newClientName, setNewClientName] = useState("");
   const [newInvoiceAmount, setNewInvoiceAmount] = useState("");
 
-  // --- SMART NETWORK SWITCHER (BUG FIXED) ---
   const forceArcNetwork = async () => {
     if (!window.ethereum) return;
     try {
       const currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
-      // Only prompt network switch if they are NOT on Arc
       if (currentChainId.toLowerCase() !== ARC_TESTNET.chainId.toLowerCase()) {
         await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: ARC_TESTNET.chainId }] });
       }
@@ -85,7 +82,6 @@ function App() {
         setAccount(accounts[0]);
         await forceArcNetwork();
         
-        // If they are a normal admin logging in, check if they have a treasury
         if (!targetTreasury) {
           checkTreasury(accounts[0]);
         }
@@ -96,14 +92,27 @@ function App() {
     }
   };
 
-  // --- FACTORY LOGIC: MULTI-TENANT ONBOARDING ---
+  // --- NEW: DISCONNECT WALLET FUNCTION ---
+  const disconnectWallet = () => {
+    setAccount("");
+    setUserTreasury(null);
+    setBalance("0");
+    setDisbursed("0");
+    setInvoices([]);
+    setHistory([]);
+  };
+
+  const launchApp = async () => {
+    setAppEntered(true);
+    await connectWallet();
+  };
+
   const checkTreasury = async (userAddress) => {
     if (FACTORY_ADDRESS === "YOUR_NEW_FACTORY_ADDRESS") return;
     const provider = new ethers.BrowserProvider(window.ethereum);
     const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
     const treasuryAddr = await factory.companyToTreasury(userAddress);
     
-    // address(0) means they don't have one yet
     if (treasuryAddr !== "0x0000000000000000000000000000000000000000") {
       setUserTreasury(treasuryAddr);
     }
@@ -119,18 +128,15 @@ function App() {
       
       const tx = await factory.createTreasury();
       await tx.wait();
-      
-      // Fetch their newly created treasury address
       await checkTreasury(account);
     } catch (err) {
       console.error(err);
-      alert("Failed to initialize treasury.");
+      alert("Failed to initialize. Ensure your wallet has Arc Testnet USDC for gas!");
     } finally {
       setIsInitializing(false);
     }
   };
 
-  // --- FETCH DATA FOR ACTIVE TREASURY ---
   const activeContractAddress = targetTreasury || userTreasury;
 
   const fetchData = async () => {
@@ -171,7 +177,6 @@ function App() {
     return () => clearInterval(interval);
   }, [activeContractAddress]);
 
-  // --- SAFE TRANSACTIONS ---
   const executeTransaction = async (action) => {
     setIsLoading(true);
     try {
@@ -183,7 +188,7 @@ function App() {
       fetchData();
     } catch (error) {
       console.error("Transaction failed:", error);
-      alert(error.reason || "Transaction failed. Check console.");
+      alert(error.reason || "Transaction failed. Ensure you have USDC for gas.");
     } finally {
       setIsLoading(false);
     }
@@ -226,7 +231,6 @@ function App() {
     }
   };
 
-  // --- UTILS (NOW INCLUDES THE TARGET TREASURY IN THE URL) ---
   const copyAuditLink = () => {
     navigator.clipboard.writeText(`${window.location.origin}/?audit=true&t=${userTreasury}`);
     alert("Public Audit Link copied! It is locked specifically to your company treasury.");
@@ -236,6 +240,33 @@ function App() {
     navigator.clipboard.writeText(`${window.location.origin}/?pay=${id}&t=${userTreasury}`);
     alert("Payment link copied! Funds will route specifically to your treasury.");
   };
+
+  // ==========================================
+  // VIEW 0: THE EPIC LANDING PAGE
+  // ==========================================
+  if (!appEntered && payInvoiceId === null && !isAuditMode) {
+    return (
+      <div className="min-h-screen bg-[#050505] text-white flex flex-col items-center justify-center p-6 font-sans relative overflow-hidden">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-[#ff5500]/5 rounded-full blur-[120px] pointer-events-none"></div>
+        <div className="relative z-10 flex flex-col items-center text-center">
+          <div className="mb-6 flex items-center justify-center gap-3 text-[#ff5500] font-bold tracking-[0.3em] uppercase text-xs">
+            <span className="w-2 h-2 bg-[#ff5500] rounded-full animate-pulse"></span>
+            Live on Arc Testnet L1
+          </div>
+          <h1 className="text-7xl md:text-[9rem] font-black tracking-tighter leading-none mb-6 text-transparent" style={{ WebkitTextStroke: '2px #ffffff', color: 'transparent' }}>
+            FAIRPAY
+          </h1>
+          <p className="max-w-xl text-zinc-400 text-sm md:text-base tracking-widest uppercase leading-relaxed mb-12">
+            Institutional-grade batch payroll and invoice settlement.<br/>
+            Deploy an isolated treasury contract and automate your Web3 operations natively with USDC.
+          </p>
+          <button onClick={launchApp} className="bg-[#ff5500] text-white font-black tracking-widest uppercase px-12 py-5 rounded-sm hover:bg-white hover:text-black transition-all duration-300 shadow-[0_0_40px_rgba(255,85,0,0.3)] hover:shadow-[0_0_40px_rgba(255,255,255,0.3)]">
+            Launch Platform
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // ==========================================
   // VIEW 1: CLIENT CHECKOUT
@@ -334,18 +365,23 @@ function App() {
         )}
         
         {!isAuditMode ? (
-          <div className="flex gap-4">
-            {activeContractAddress && <button onClick={copyAuditLink} className="text-xs font-bold text-zinc-400 hover:text-white transition">COPY AUDIT LINK</button>}
-            <button onClick={connectWallet} className="text-xs font-mono border border-zinc-800 px-6 py-2 rounded-full hover:border-[#ff5500]">
-              {account ? `${account.slice(0,6)}...${account.slice(-4)}` : "CONNECT"}
+          <div className="flex gap-4 items-center">
+            {activeContractAddress && <button onClick={copyAuditLink} className="text-[10px] font-bold text-zinc-400 hover:text-white transition uppercase tracking-widest">Copy Audit Link</button>}
+            
+            {/* --- RECTANGULAR CONNECT/DISCONNECT BUTTON --- */}
+            <button 
+              onClick={account ? disconnectWallet : connectWallet} 
+              className="text-xs font-bold uppercase tracking-widest border border-zinc-700 bg-zinc-950 px-6 py-3 rounded-sm hover:bg-zinc-800 transition text-zinc-300"
+            >
+              {account ? `Disconnect (${account.slice(0,4)}...${account.slice(-4)})` : "Connect Wallet"}
             </button>
+
           </div>
         ) : (
-          <div className="text-xs font-mono text-zinc-600 border border-zinc-800 px-6 py-2 rounded-full">WALLET DISABLED</div>
+          <div className="text-xs font-bold uppercase tracking-widest text-zinc-600 border border-zinc-800 bg-zinc-950 px-6 py-3 rounded-sm">WALLET DISABLED</div>
         )}
       </header>
 
-      {/* If wallet is connected but no treasury is loaded yet, hide main content */}
       {(!activeContractAddress && !isAuditMode) ? (
         <div className="flex flex-col items-center justify-center mt-32 text-zinc-500">
           <p className="text-sm font-mono uppercase tracking-widest">Connect Wallet to Load Your Treasury Dashboard</p>
@@ -377,7 +413,7 @@ function App() {
                   <div className="border-b border-zinc-700 pb-2 flex items-end">
                     <input type="number" placeholder="0.00" value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} disabled={isLoading} className="bg-transparent text-4xl font-bold outline-none w-full disabled:opacity-50" />
                   </div>
-                  <button onClick={handleDeposit} disabled={isLoading} className={`mt-8 text-black text-xs font-bold uppercase px-8 py-4 w-full md:w-auto transition flex justify-center items-center gap-2 ${isLoading ? 'bg-zinc-500 cursor-not-allowed' : 'bg-white hover:bg-zinc-200'}`}>
+                  <button onClick={handleDeposit} disabled={isLoading} className={`mt-8 text-black text-xs font-bold uppercase px-8 py-4 w-full md:w-auto transition flex justify-center items-center gap-2 rounded-sm ${isLoading ? 'bg-zinc-500 cursor-not-allowed' : 'bg-white hover:bg-zinc-200'}`}>
                     {isLoading ? 'Processing...' : 'Execute Deposit'}
                   </button>
                 </div>
@@ -393,16 +429,16 @@ function App() {
                 <div className="min-w-[600px]">
                   {employees.map((emp, index) => (
                     <div key={index} className="grid grid-cols-12 gap-2 mb-2">
-                      <input placeholder="Name" value={emp.name} disabled={isLoading} onChange={(e) => { const n = [...employees]; n[index].name = e.target.value; setEmployees(n); }} className="col-span-3 bg-zinc-900/50 border border-zinc-800 p-3 text-sm outline-none disabled:opacity-50" />
-                      <input placeholder="Wallet" value={emp.address} disabled={isLoading} onChange={(e) => { const n = [...employees]; n[index].address = e.target.value; setEmployees(n); }} className="col-span-6 bg-zinc-900/50 border border-zinc-800 p-3 text-sm font-mono outline-none disabled:opacity-50" />
-                      <input placeholder="USDC" type="number" value={emp.amount} disabled={isLoading} onChange={(e) => { const n = [...employees]; n[index].amount = e.target.value; setEmployees(n); }} className="col-span-3 bg-zinc-900/50 border border-zinc-800 p-3 text-sm font-mono outline-none disabled:opacity-50" />
+                      <input placeholder="Name" value={emp.name} disabled={isLoading} onChange={(e) => { const n = [...employees]; n[index].name = e.target.value; setEmployees(n); }} className="col-span-3 bg-zinc-900/50 border border-zinc-800 p-3 text-sm outline-none rounded-sm disabled:opacity-50" />
+                      <input placeholder="Wallet" value={emp.address} disabled={isLoading} onChange={(e) => { const n = [...employees]; n[index].address = e.target.value; setEmployees(n); }} className="col-span-6 bg-zinc-900/50 border border-zinc-800 p-3 text-sm font-mono outline-none rounded-sm disabled:opacity-50" />
+                      <input placeholder="USDC" type="number" value={emp.amount} disabled={isLoading} onChange={(e) => { const n = [...employees]; n[index].amount = e.target.value; setEmployees(n); }} className="col-span-3 bg-zinc-900/50 border border-zinc-800 p-3 text-sm font-mono outline-none rounded-sm disabled:opacity-50" />
                     </div>
                   ))}
                 </div>
               </div>
               <button onClick={() => setEmployees([...employees, { name: "", address: "", amount: "" }])} disabled={isLoading} className="text-xs font-bold uppercase text-zinc-500 mb-12 block hover:text-white disabled:opacity-50">+ Add Row</button>
               <div className="border-t border-zinc-900 pt-8">
-                <button onClick={handlePayroll} disabled={isLoading} className={`text-white text-xs font-bold uppercase px-8 py-5 w-full md:w-1/3 transition flex justify-center items-center gap-2 ${isLoading ? 'bg-zinc-700 cursor-not-allowed opacity-50' : 'bg-[#ff5500] hover:bg-[#ff7733]'}`}>
+                <button onClick={handlePayroll} disabled={isLoading} className={`text-white text-xs font-bold uppercase px-8 py-5 rounded-sm w-full md:w-1/3 transition flex justify-center items-center gap-2 ${isLoading ? 'bg-zinc-700 cursor-not-allowed opacity-50' : 'bg-[#ff5500] hover:bg-[#ff7733] shadow-[0_0_20px_rgba(255,85,0,0.3)]'}`}>
                   {isLoading ? 'Processing...' : 'Execute Transfer'}
                 </button>
               </div>
@@ -414,13 +450,13 @@ function App() {
             <div className="animate-in fade-in">
               <h1 className="text-5xl md:text-7xl font-black tracking-tighter text-transparent mb-12" style={{ WebkitTextStroke: '1px #333' }}>INVOICES</h1>
               {!isAuditMode && (
-                <div className="flex gap-4 mb-8 bg-zinc-900/50 p-6 border border-zinc-800 flex-wrap rounded-lg">
-                  <input type="text" placeholder="Client Name" value={newClientName} disabled={isLoading} onChange={e => setNewClientName(e.target.value)} className="bg-zinc-950 border border-zinc-800 p-3 outline-none flex-1 rounded disabled:opacity-50" />
-                  <input type="number" placeholder="USDC" value={newInvoiceAmount} disabled={isLoading} onChange={e => setNewInvoiceAmount(e.target.value)} className="bg-zinc-950 border border-zinc-800 p-3 outline-none w-48 rounded disabled:opacity-50" />
-                  <button onClick={handleCreateInvoice} disabled={isLoading} className={`text-black text-xs font-bold uppercase px-8 py-3 rounded transition flex items-center justify-center gap-2 ${isLoading ? 'bg-zinc-500 cursor-not-allowed' : 'bg-white hover:bg-zinc-200'}`}>Issue</button>
+                <div className="flex gap-4 mb-8 bg-zinc-900/50 p-6 border border-zinc-800 flex-wrap rounded-sm">
+                  <input type="text" placeholder="Client Name" value={newClientName} disabled={isLoading} onChange={e => setNewClientName(e.target.value)} className="bg-zinc-950 border border-zinc-800 p-3 outline-none flex-1 rounded-sm disabled:opacity-50" />
+                  <input type="number" placeholder="USDC" value={newInvoiceAmount} disabled={isLoading} onChange={e => setNewInvoiceAmount(e.target.value)} className="bg-zinc-950 border border-zinc-800 p-3 outline-none w-48 rounded-sm disabled:opacity-50" />
+                  <button onClick={handleCreateInvoice} disabled={isLoading} className={`text-black text-xs font-bold uppercase px-8 py-3 rounded-sm transition flex items-center justify-center gap-2 ${isLoading ? 'bg-zinc-500 cursor-not-allowed' : 'bg-white hover:bg-zinc-200'}`}>Issue</button>
                 </div>
               )}
-              <div className="bg-zinc-900/30 border border-zinc-800 p-6 rounded-lg overflow-x-auto">
+              <div className="bg-zinc-900/30 border border-zinc-800 p-6 rounded-sm overflow-x-auto">
                 <table className="w-full text-left min-w-[600px]">
                   <thead>
                     <tr className="text-xs text-zinc-500 uppercase border-b border-zinc-800"><th className="pb-4">ID</th><th className="pb-4">Client</th><th className="pb-4">Amount</th><th className="pb-4">Status</th>{!isAuditMode && <th className="pb-4 text-right">Action</th>}</tr>
@@ -432,7 +468,7 @@ function App() {
                         <td className="py-6 font-bold">{inv.client}</td>
                         <td className="py-6 font-mono">{inv.amount} USDC</td>
                         <td className="py-6"><span className={`text-xs font-bold px-3 py-1 rounded-full ${inv.isPaid ? 'bg-green-500/10 text-green-500' : 'bg-yellow-500/10 text-yellow-500'}`}>{inv.isPaid ? 'PAID' : 'PENDING'}</span></td>
-                        {!isAuditMode && <td className="py-6 text-right"><button onClick={() => copyInvoiceLink(inv.id)} className="text-xs font-bold uppercase tracking-widest text-[#ff5500] hover:text-white transition border border-[#ff5500]/30 hover:border-[#ff5500] px-3 py-1 rounded">Copy Link</button></td>}
+                        {!isAuditMode && <td className="py-6 text-right"><button onClick={() => copyInvoiceLink(inv.id)} className="text-[10px] font-bold uppercase tracking-widest text-[#ff5500] hover:text-white transition border border-[#ff5500]/30 hover:border-[#ff5500] px-3 py-1 rounded-sm">Copy Link</button></td>}
                       </tr>
                     ))}
                   </tbody>
@@ -447,9 +483,9 @@ function App() {
               <h1 className="text-5xl md:text-7xl font-black tracking-tighter text-transparent mb-12" style={{ WebkitTextStroke: '1px #333' }}>ON-CHAIN LEDGER</h1>
               <div className="space-y-4">
                 {history.length === 0 ? <p className="text-zinc-500 italic">Reading Arc ledger...</p> : history.map((event, i) => (
-                  <div key={i} className="flex justify-between items-center p-6 bg-zinc-900/40 border border-zinc-800 rounded-lg hover:border-zinc-700 transition">
+                  <div key={i} className="flex justify-between items-center p-6 bg-zinc-900/40 border border-zinc-800 rounded-sm hover:border-zinc-700 transition">
                     <div className="flex gap-6 items-center">
-                      <span className={`text-[10px] font-bold uppercase tracking-widest px-3 py-2 rounded-md w-28 text-center ${event.type === 'DEPOSIT' || event.type === 'INVOICE PAID' ? 'bg-green-500/10 text-green-500 border border-green-500/20' : 'bg-blue-500/10 text-blue-500 border border-blue-500/20'}`}>{event.type}</span>
+                      <span className={`text-[10px] font-bold uppercase tracking-widest px-3 py-2 rounded-sm w-28 text-center ${event.type === 'DEPOSIT' || event.type === 'INVOICE PAID' ? 'bg-green-500/10 text-green-500 border border-green-500/20' : 'bg-blue-500/10 text-blue-500 border border-blue-500/20'}`}>{event.type}</span>
                       <div>
                         <p className="text-sm font-bold text-white">{event.desc}</p>
                         <a href={`https://explorer.arc.circle.com/tx/${event.hash}`} target="_blank" className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 hover:text-[#ff5500] mt-1 flex items-center gap-1 transition">View Receipt</a>
