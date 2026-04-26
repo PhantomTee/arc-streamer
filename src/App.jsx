@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { ethers } from "ethers";
 
 // --- PASTE YOUR REMIX ADDRESS HERE ---
-const CONTRACT_ADDRESS = "YOUR_NEW_REMIX_ADDRESS"; 
+const CONTRACT_ADDRESS = "0xeaE7B4cbd64a9427526d6A181de002e5a182bcdd"; 
 
 const ABI = [
   "function deposit() public payable",
